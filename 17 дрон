@@ -1,110 +1,126 @@
+import os
 import cv2
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import transforms
+from collections import Counter
 
-# Путь к видеофайлу
-VIDEO_PATH = r"C:\Users\26\Desktop\test1.mp4"
+# --- 1. МОДЕЛЬ (MultiHeadNet) ---
+class MultiHeadNet(nn.Module):
+    def __init__(self):
+        super(MultiHeadNet, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2),
+            nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2),
+            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2)
+        )
+        self.flatten = nn.Flatten()
+        self.fc_common = nn.Linear(64 * 28 * 28, 256)
+        self.fc_obj = nn.Linear(256, 5)
+        self.fc_type = nn.Linear(256, 4)
 
+    def forward(self, x):
+        x = self.features(x)
+        x = self.flatten(x)
+        x = F.relu(self.fc_common(x))
+        return self.fc_obj(x), self.fc_type(x)
 
-# Настройки
-RESIZE_SCALE = 0.5  # Масштаб уменьшения видео (50 % от оригинала)
-MIN_AREA = 1200  # Минимальная площадь контура для обнаружения (фильтр мелких шумов)
-THRESHOLD1 = 50  # Первый порог для детектора Канни
-THRESHOLD2 = 150  # Второй порог для детектора Канни
+# --- 2. НАСТРОЙКИ ---
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = MultiHeadNet().to(device)
 
-def detect_and_draw_contours(frame, min_area, threshold1, threshold2):
-    """Обнаруживает контуры на кадре и обводит их в квадраты."""
-    # Уменьшаем кадр для ускорения обработки
-    height, width = frame.shape[:2]
-    new_width = int(width * RESIZE_SCALE)
-    new_height = int(height * RESIZE_SCALE)
-    resized_frame = cv2.resize(frame, (new_width, new_height))
+MODEL_PATH = r"C:\Users\дитма\Desktop\yfeweldlwe\model.pth"
+VIDEO_PATH = r"C:\Users\дитма\Desktop\day 1\Day1\chekevent\for_pub\test1.mp4"
 
-    # Конвертируем в оттенки серого
-    gray_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
+tr = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+])
 
-    # Применяем размытие для уменьшения шума
-    blurred = cv2.GaussianBlur(gray_frame, (5, 5), 0)
+# Мгновенная загрузка
+if os.path.exists(MODEL_PATH):
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    model.eval()
+    print(">>> Модель готова.")
+else:
+    print("Ошибка: Файл весов не найден!")
+    exit()
 
-    # Обнаружение краёв с помощью детектора Канни
-    edges = cv2.Canny(blurred, threshold1, threshold2)
+houses = {"1": "2", "2": "4A", "3": "6", "4": "8A", "5": "10"}
+catastrophies = {"1": "Fire", "2": "Flood", "3": "Man-made disaster", "4": "Human emergency"}
 
-    # Находим контуры
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+# ПАРАМЕТРЫ СТАБИЛИЗАЦИИ
+history_obj = []
+history_type = []
+SMOOTH_K = 10 # Уменьшили размер "памяти" для скорости
+prev_rects = {}
 
-    detected_count = 0
+def get_smooth_rect(idx, new_rect, alpha=0.3):
+    if idx not in prev_rects:
+        prev_rects[idx] = new_rect
+        return new_rect
+    old = prev_rects[idx]
+    return tuple(int(old[i]*(1-alpha) + new_rect[i]*alpha) for i in range(4))
 
-    for contour in contours:
-        # Фильтруем мелкие контуры по площади
-        if cv2.contourArea(contour) < min_area:
-            continue
+# --- 3. ЦИКЛ ---
+cap = cv2.VideoCapture(VIDEO_PATH)
 
-        # Получаем ограничивающий прямоугольник вокруг контура
-        x, y, w, h = cv2.boundingRect(contour)
+print(">>> Запуск видеопотока...")
 
-        # Масштабируем координаты обратно к оригинальному размеру
-        orig_x = int(x / RESIZE_SCALE)
-        orig_y = int(y / RESIZE_SCALE)
-        orig_w = int(w / RESIZE_SCALE)
-        orig_h = int(h / RESIZE_SCALE)
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret: break
+    
+    # Нейросеть (анализ)
+    img_t = tr(frame).unsqueeze(0).to(device)
+    with torch.no_grad():
+        out_obj, out_type = model(img_t)
+        raw_o = out_obj.argmax().item() + 1
+        raw_t = out_type.argmax().item() + 1
+        
+        history_obj.append(raw_o)
+        history_type.append(raw_t)
 
-        # Рисуем прямоугольник вокруг найденного объекта (зелёный, толщина 2 px)
-        cv2.rectangle(frame,
-                     (orig_x, orig_y),
-                     (orig_x + orig_w, orig_y + orig_h),
-                     (0, 255, 0), 2)  # Зелёный цвет (BGR), толщина 2 px
+    # Держим историю короткой для быстрого обновления
+    if len(history_obj) > SMOOTH_K:
+        history_obj.pop(0)
+        history_type.pop(0)
+    
+    # Голосование (берем самый частый вариант)
+    # Используем [0][0], чтобы получить число напрямую
+    obj_res = Counter(history_obj).most_common(1)[0][0]
+    type_res = Counter(history_type).most_common(1)[0][0]
 
-        # Подпись над прямоугольником
-        cv2.putText(frame, "Объект найден", (orig_x, orig_y - 10),
-                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        detected_count += 1
+    # Поиск коробок
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, np.array([10, 50, 50]), np.array([30, 255, 255]))
+    mask = cv2.GaussianBlur(mask, (5, 5), 0)
+    
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    rects = [cv2.boundingRect(cnt) for cnt in contours if cv2.contourArea(cnt) > 2000]
+    rects.sort(key=lambda r: r[0]) # Сортировка по X
 
-    return frame, detected_count
+    # Отрисовка
+    for i, rect in enumerate(rects):
+        curr_num = i + 1
+        x, y, w, h = get_smooth_rect(curr_num, rect)
+        
+        if curr_num == obj_res:
+            color, thick = (255, 0, 0), 3 # Синий
+            label = f"DOM {houses.get(str(curr_num))}: {catastrophies.get(str(type_res))}"
+        else:
+            color, thick = (0, 255, 0), 1 # Зеленый
+            label = f"DOM {houses.get(str(curr_num), '?')}"
 
-def main():
-    cap = cv2.VideoCapture(VIDEO_PATH)
-    if not cap.isOpened():
-        print(f"[ОШИБКА] Не удалось открыть видеофайл: {VIDEO_PATH}")
-        print("Проверьте путь к видео и его формат.")
-        return
+        cv2.rectangle(frame, (x, y), (x + w, y + h), color, thick)
+        cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-    print("✅ Видео загружено. Начата обработка...")
-    print("Нажмите 'Esc' для выхода.")
+    cv2.imshow('STABLE MONITORING', frame)
+    # Нажми ESC для выхода
+    if cv2.waitKey(1) == 27: break
 
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("📺 Достигнут конец видеофайла.")
-                break
-
-            # Обработка кадра: поиск контуров и обводка найденных объектов в прямоугольники
-            processed_frame, obj_count = detect_and_draw_contours(
-                frame, MIN_AREA, THRESHOLD1, THRESHOLD2
-            )
-
-            # Выводим количество найденных объектов в левом верхнем углу
-            cv2.putText(processed_frame,
-                      f"Найдено объектов: {obj_count}",
-                      (10, 30),
-                      cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-            # Уменьшаем итоговое изображение для отображения
-            height, width = processed_frame.shape[:2]
-            display_frame = cv2.resize(processed_frame,
-                          (int(width * RESIZE_SCALE), int(height * RESIZE_SCALE)))
-
-            # Отображение результата
-            cv2.imshow('Обнаружение объектов по контурам [Нажмите "Esc" для выхода]', display_frame)
-
-            # Выход по Esc (код 27)
-            if cv2.waitKey(1) == 27:
-                break
-    except Exception as e:
-        print(f"[ОШИБКА] Произошла ошибка: {e}")
-    finally:
-        cap.release()
-        cv2.destroyAllWindows()
-        print("🛠 Работа завершена.")
-
-if __name__ == "__main__":
-    main()
+cap.release()
+cv2.destroyAllWindows()
