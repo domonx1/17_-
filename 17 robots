@@ -1,35 +1,45 @@
 import cv2
 import numpy as np
+import os
 
-# Путь к видео
+# 1. Пути к файлам
 video_path = r"C:\Users\26\Desktop\Day1\checklile\for_pub\eval1\robot_2026-03-13_10-27-09.avi"
+log_directory = r"C:\Users\26\Desktop\лог файл"
+log_filename = "user.txt"
+full_log_path = os.path.join(log_directory, log_filename)
+
+# Создаем папку, если её нет
+if not os.path.exists(log_directory):
+    os.makedirs(log_directory)
+
 cap = cv2.VideoCapture(video_path)
 
-# Открываем файл для записи (user.txt)
-with open("user.txt", "w") as log_file:
-    # Параметры П-регулятора (подберите под логи организаторов)
-    BASE_SPEED = 50 
-    K_P = 0.3 # Коэффициент поворота
+# Параметры П-регулятора
+BASE_SPEED = 50 
+K_P = 0.3 
+
+# Открываем файл для записи
+with open(full_log_path, "w") as log_file:
+    print(f"Запись лога в: {full_log_path}")
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        # 1. Обработка видео (Детекция черной линии)
+        # 2. Обработка видео (Детекция черной линии)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Инвертируем, чтобы линия была белой на черном фоне (для поиска контуров)
+        # Пороговая фильтрация (черное -> белое для поиска)
         _, thresh = cv2.threshold(gray, 70, 255, cv2.THRESH_BINARY_INV)
 
-        # Выбираем рабочую область внизу кадра
+        # Выбираем рабочую область внизу кадра (ROI)
         h, w = thresh.shape
         roi = thresh[int(h*0.7):int(h*0.9), :]
         
         # Находим центр линии через моменты
         M = cv2.moments(roi)
         
-        # Значения по умолчанию (едем прямо)
         v_left, v_right = BASE_SPEED, BASE_SPEED
 
         if M["m00"] > 0:
@@ -38,26 +48,31 @@ with open("user.txt", "w") as log_file:
             # Ошибка отклонения от центра кадра
             error = cx - (w // 2)
             
-            # 2. Расчет скоростей
-            # Если линия справа (error > 0), левый мотор быстрее, правый медленнее
+            # 3. Расчет скоростей
             v_left = int(BASE_SPEED + error * K_P)
             v_right = int(BASE_SPEED - error * K_P)
 
-            # Ограничиваем скорость в разумных пределах (например, 0-100)
+            # Ограничение скоростей (0-100)
             v_left = max(0, min(100, v_left))
             v_right = max(0, min(100, v_right))
 
-            # Визуализация (для 20 баллов)
+            # Визуализация детекции (20 баллов)
             cv2.circle(frame, (cx, int(h*0.8)), 7, (0, 0, 255), -1)
 
-        # 3. Сохранение скоростей (ФОРМАТ: "лево право")
-        # ВНИМАНИЕ: Если в true.txt числа через запятую, замените пробел ниже на запятую
+        # 4. Сохранение скоростей в лог (ФОРМАТ: "лево право")
         log_file.write(f"{v_left} {v_right}\n")
 
-        # Вывод на экран для контроля
+        # Вывод на экран
         cv2.putText(frame, f"L:{v_left} R:{v_right}", (20, 40), 
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.imshow('Line Tracking', frame)
+        
+        cv2.imshow('Line Tracking (Slow Motion)', frame)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        # --- ЗАМЕДЛЕНИЕ ---
+        # 1 - очень быстро, 30 - норма, 60 - в 2 раза медленнее
+        if cv2.waitKey(60) & 0xFF == ord('q'):
             break
+
+cap.release()
+cv2.destroyAllWindows()
+print(f"Готово! Файл сохранен в {full_log_path}")
