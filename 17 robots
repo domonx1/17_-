@@ -1,129 +1,63 @@
 import cv2
 import numpy as np
-import time
-import os
 
-# Настройки
-VIDEO_PATH = r"C:\Users\26\Desktop\Day1\checklile\for_pub\eval1\robot_2026-03-13_10-27-09.avi"
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
-LINE_THRESHOLD = 100  # Увеличен порог для лучшей сегментации
-CENTER_ZONE = 80     # Зона по центру для прямого движения (в пикселях)
-MOTOR_SPEED_BASE = 50  # Базовая скорость моторов (0–100 %)
-TURN_SPEED_DIFF = 30   # Разница скоростей при повороте (0–100 %)
-LOG_FILE = "user.txt"   # Файл для сохранения логов
+# Путь к видео
+video_path = r"C:\Users\26\Desktop\Day1\checklile\for_pub\eval1\robot_2026-03-13_10-27-09.avi"
+cap = cv2.VideoCapture(video_path)
 
-class LineFollowerVideo:
-    def __init__(self):
-        self.cap = cv2.VideoCapture(VIDEO_PATH)
-        if not self.cap.isOpened():
-            raise FileNotFoundError(f"❌ Не удалось открыть видеофайл: {VIDEO_PATH}")
-        # Устанавливаем разрешение (если поддерживается)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-        # Очищаем файл лога перед началом
-        with open(LOG_FILE, 'w') as f:
-            f.write("time,left_motor,right_motor\n")
-        print(f"✅ Видеофайл загружен: {VIDEO_PATH}")
-        print(f"🤖 Запуск обработки видео. Логи сохраняются в {LOG_FILE}")
+# Открываем файл для записи (user.txt)
+with open("user.txt", "w") as log_file:
+    # Параметры П-регулятора (подберите под логи организаторов)
+    BASE_SPEED = 50 
+    K_P = 0.3 # Коэффициент поворота
 
-    def process_frame(self, frame):
-        """Обрабатывает кадр для анализа линии, возвращает позицию линии относительно центра."""
-        # Конвертируем в оттенки серого для анализа
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # 1. Обработка видео (Детекция черной линии)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # Бинаризация: чёрная линия становится белой (255), фон — чёрным (0) — только для анализа
-        _, binary = cv2.threshold(gray, LINE_THRESHOLD, 255, cv2.THRESH_BINARY)  # УБРАЛ _INV
-        # Ищем контуры
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours:
-            # Находим самый большой контур (предполагаем, что это линия)
-            largest_contour = max(contours, key=cv2.contourArea)
-            # Получаем ограничивающий прямоугольник
-            x, y, w, h = cv2.boundingRect(largest_contour)
-            line_center_x = x + w // 2
-            frame_center_x = FRAME_WIDTH // 2
-            # Позиция линии относительно центра кадра
-            position = line_center_x - frame_center_x
-            return position, binary
-        return 0, binary  # Если линия не найдена, возвращаем 0
+        
+        # Инвертируем, чтобы линия была белой на черном фоне (для поиска контуров)
+        _, thresh = cv2.threshold(gray, 70, 255, cv2.THRESH_BINARY_INV)
 
-    def calculate_motor_speeds(self, position):
-        """Рассчитывает скорости моторов на основе позиции линии."""
-        if abs(position) < CENTER_ZONE:
-            # Линия по центру — едем прямо
-            left_speed = MOTOR_SPEED_BASE
-            right_speed = MOTOR_SPEED_BASE
-        elif position < 0:
-            # Линия слева — поворачиваем налево (уменьшаем скорость левого мотора)
-            left_speed = MOTOR_SPEED_BASE - TURN_SPEED_DIFF
-            right_speed = MOTOR_SPEED_BASE + TURN_SPEED_DIFF
-        else:
-            # Линия справа — поворачиваем направо (уменьшаем скорость правого мотора)
-            left_speed = MOTOR_SPEED_BASE + TURN_SPEED_DIFF
-            right_speed = MOTOR_SPEED_BASE - TURN_SPEED_DIFF
-        # Ограничиваем скорости в диапазоне 0–100
-        left_speed = max(0, min(100, left_speed))
-        right_speed = max(0, min(100, right_speed))
-        return left_speed, right_speed
+        # Выбираем рабочую область внизу кадра
+        h, w = thresh.shape
+        roi = thresh[int(h*0.7):int(h*0.9), :]
+        
+        # Находим центр линии через моменты
+        M = cv2.moments(roi)
+        
+        # Значения по умолчанию (едем прямо)
+        v_left, v_right = BASE_SPEED, BASE_SPEED
 
-    def log_motor_speeds(self, left_speed, right_speed):
-        """Сохраняет скорости моторов в лог‑файл."""
-        timestamp = time.time()
-        with open(LOG_FILE, 'a') as f:
-            f.write(f"{timestamp:.6f},{left_speed},{right_speed}\n")
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            
+            # Ошибка отклонения от центра кадра
+            error = cx - (w // 2)
+            
+            # 2. Расчет скоростей
+            # Если линия справа (error > 0), левый мотор быстрее, правый медленнее
+            v_left = int(BASE_SPEED + error * K_P)
+            v_right = int(BASE_SPEED - error * K_P)
 
-    def run(self):
-        """Основной цикл программы для обработки видео."""
-        print("🤖 Запуск обработки видеофайла. Нажмите 'Esc' для досрочного выхода.")
-        frame_count = 0
-        start_time = time.time()
+            # Ограничиваем скорость в разумных пределах (например, 0-100)
+            v_left = max(0, min(100, v_left))
+            v_right = max(0, min(100, v_right))
 
-        try:
-            while True:
-                ret, frame = self.cap.read()
-                if not ret:
-                    print(f"\n📽️ Обработка завершена. Обработано кадров: {frame_count}")
-                    break
+            # Визуализация (для 20 баллов)
+            cv2.circle(frame, (cx, int(h*0.8)), 7, (0, 0, 255), -1)
 
+        # 3. Сохранение скоростей (ФОРМАТ: "лево право")
+        # ВНИМАНИЕ: Если в true.txt числа через запятую, замените пробел ниже на запятую
+        log_file.write(f"{v_left} {v_right}\n")
 
-                # Обрабатываем кадр для анализа линии
-                position, binary = self.process_frame(frame)
-                # Рассчитываем скорости моторов
-                left_speed, right_speed = self.calculate_motor_speeds(position)
-                # Сохраняем в лог
-                self.log_motor_speeds(left_speed, right_speed)
-                frame_count += 1
+        # Вывод на экран для контроля
+        cv2.putText(frame, f"L:{v_left} R:{v_right}", (20, 40), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.imshow('Line Tracking', frame)
 
-                # Визуализация для отладки — используем исходный кадр в оригинальных цветах
-                cv2.putText(frame, f"Left: {left_speed}%", (10, 30),
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                cv2.putText(frame, f"Right: {right_speed}%", (10, 60),
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                cv2.putText(frame, f"Pos: {position}", (10, 90),
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-
-                # Отображение кадров:
-                # - 'Original Frame' — исходное видео в своих цветах
-                # - 'Binary Line Detection' — бинаризованное изображение только для анализа линии
-                cv2.imshow('Original Frame (Original Colors)', frame)
-                cv2.imshow('Binary Line Detection (Analysis Only)', binary)
-
-                # Выход по клавише 'Esc' (код 27)
-                key = cv2.waitKey(1) & 0xFF
-                if key == 27:  # Esc
-                    print("\n🛑 Обработка прервана пользователем (нажата клавиша Esc).")
-                    break
-        except Exception as e:
-            print(f"[ОШИБКА] Произошла ошибка: {e}")
-        finally:
-            self.cap.release()
-            cv2.destroyAllWindows()
-            total_time = time.time() - start_time
-            print(f"📁 Логи сохранены в {LOG_FILE}.")
-            print(f"⏱️ Время обработки: {total_time:.2f} сек.")
-            print(f"🖼️ Кадры: {frame_count} шт.")
-            print("🛠 Завершение работы.")
-
-if __name__ == "__main__":
-    follower = LineFollowerVideo()
-    follower.run()
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
