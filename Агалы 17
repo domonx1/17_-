@@ -1,0 +1,110 @@
+import cv2
+import numpy as np
+
+# Путь к видеофайлу
+VIDEO_PATH = r"C:\Users\26\Desktop\test1.mp4"
+
+
+# Настройки
+RESIZE_SCALE = 0.5  # Масштаб уменьшения видео (50 % от оригинала)
+MIN_AREA = 1200  # Минимальная площадь контура для обнаружения (фильтр мелких шумов)
+THRESHOLD1 = 50  # Первый порог для детектора Канни
+THRESHOLD2 = 150  # Второй порог для детектора Канни
+
+def detect_and_draw_contours(frame, min_area, threshold1, threshold2):
+    """Обнаруживает контуры на кадре и обводит их в квадраты."""
+    # Уменьшаем кадр для ускорения обработки
+    height, width = frame.shape[:2]
+    new_width = int(width * RESIZE_SCALE)
+    new_height = int(height * RESIZE_SCALE)
+    resized_frame = cv2.resize(frame, (new_width, new_height))
+
+    # Конвертируем в оттенки серого
+    gray_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
+
+    # Применяем размытие для уменьшения шума
+    blurred = cv2.GaussianBlur(gray_frame, (5, 5), 0)
+
+    # Обнаружение краёв с помощью детектора Канни
+    edges = cv2.Canny(blurred, threshold1, threshold2)
+
+    # Находим контуры
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    detected_count = 0
+
+    for contour in contours:
+        # Фильтруем мелкие контуры по площади
+        if cv2.contourArea(contour) < min_area:
+            continue
+
+        # Получаем ограничивающий прямоугольник вокруг контура
+        x, y, w, h = cv2.boundingRect(contour)
+
+        # Масштабируем координаты обратно к оригинальному размеру
+        orig_x = int(x / RESIZE_SCALE)
+        orig_y = int(y / RESIZE_SCALE)
+        orig_w = int(w / RESIZE_SCALE)
+        orig_h = int(h / RESIZE_SCALE)
+
+        # Рисуем прямоугольник вокруг найденного объекта (зелёный, толщина 2 px)
+        cv2.rectangle(frame,
+                     (orig_x, orig_y),
+                     (orig_x + orig_w, orig_y + orig_h),
+                     (0, 255, 0), 2)  # Зелёный цвет (BGR), толщина 2 px
+
+        # Подпись над прямоугольником
+        cv2.putText(frame, "Объект найден", (orig_x, orig_y - 10),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        detected_count += 1
+
+    return frame, detected_count
+
+def main():
+    cap = cv2.VideoCapture(VIDEO_PATH)
+    if not cap.isOpened():
+        print(f"[ОШИБКА] Не удалось открыть видеофайл: {VIDEO_PATH}")
+        print("Проверьте путь к видео и его формат.")
+        return
+
+    print("✅ Видео загружено. Начата обработка...")
+    print("Нажмите 'Esc' для выхода.")
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("📺 Достигнут конец видеофайла.")
+                break
+
+            # Обработка кадра: поиск контуров и обводка найденных объектов в прямоугольники
+            processed_frame, obj_count = detect_and_draw_contours(
+                frame, MIN_AREA, THRESHOLD1, THRESHOLD2
+            )
+
+            # Выводим количество найденных объектов в левом верхнем углу
+            cv2.putText(processed_frame,
+                      f"Найдено объектов: {obj_count}",
+                      (10, 30),
+                      cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+            # Уменьшаем итоговое изображение для отображения
+            height, width = processed_frame.shape[:2]
+            display_frame = cv2.resize(processed_frame,
+                          (int(width * RESIZE_SCALE), int(height * RESIZE_SCALE)))
+
+            # Отображение результата
+            cv2.imshow('Обнаружение объектов по контурам [Нажмите "Esc" для выхода]', display_frame)
+
+            # Выход по Esc (код 27)
+            if cv2.waitKey(1) == 27:
+                break
+    except Exception as e:
+        print(f"[ОШИБКА] Произошла ошибка: {e}")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        print("🛠 Работа завершена.")
+
+if __name__ == "__main__":
+    main()
