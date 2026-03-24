@@ -1,0 +1,71 @@
+import cv2
+import numpy as np
+
+# Путь к вашему видео
+video_path = r"C:\Users\26\Desktop\Day1\TraficControl\for_pub\robot_2026-03-13_11-11-07.avi"
+cap = cv2.VideoCapture(video_path)
+
+# Настройки цветовых диапазонов HSV (могут требовать подстройки под освещение)
+yellow_lower = np.array([20, 100, 100])
+yellow_upper = np.array([30, 255, 255])
+
+red_lower1 = np.array([0, 100, 100])
+red_upper1 = np.array([10, 255, 255])
+red_lower2 = np.array([160, 100, 100])
+red_upper2 = np.array([180, 255, 255])
+
+green_lower = np.array([40, 50, 50])
+green_upper = np.array([90, 255, 255])
+
+def get_mask_coords(mask, min_area=500):
+    """Находит контуры и возвращает координаты самой большой области"""
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        largest = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(largest) > min_area:
+            return cv2.boundingRect(largest)
+    return None
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    # 1. Детекция желтой стоп-линии
+    yellow_mask = cv2.inRange(hsv, yellow_lower, yellow_upper)
+    line_box = get_mask_coords(yellow_mask, min_area=1000)
+    
+    # Считаем, что робот "у линии", если она находится в нижней части кадра
+    at_line = False
+    if line_box:
+        x, y, w, h = line_box
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 255), 2) # Рисуем линию
+        if y + h > frame.shape[0] * 0.7: # Линия в нижней 30% части экрана
+            at_line = True
+
+    # 2. Детекция сигналов светофора
+    mask_r = cv2.add(cv2.inRange(hsv, red_lower1, red_upper1), cv2.inRange(hsv, red_lower2, red_upper2))
+    mask_g = cv2.inRange(hsv, green_lower, green_upper)
+
+    red_box = get_mask_coords(mask_r, min_area=200)
+    green_box = get_mask_coords(mask_g, min_area=200)
+
+    # 3. Логика отображения надписей
+    if at_line:
+        if red_box:
+            x, y, w, h = red_box
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2) # Рамка светофора
+            cv2.putText(frame, "STOP", (50, 150), cv2.FONT_HERSHEY_DUPLEX, 3, (0, 0, 255), 5)
+        elif green_box:
+            x, y, w, h = green_box
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2) # Рамка светофора
+            cv2.putText(frame, "GO!", (50, 150), cv2.FONT_HERSHEY_DUPLEX, 3, (0, 255, 0), 5)
+
+    cv2.imshow('Traffic Control System', frame)
+    if cv2.waitKey(25) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
