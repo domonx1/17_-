@@ -1,11 +1,15 @@
 import cv2
 import numpy as np
 import os
+from datetime import datetime  # Добавили для уникальных имен
 
 # 1. Пути к файлам
-video_path = r"C:\Users\26\Desktop\Day1\checklile\for_pub\eval1\robot_2026-03-13_10-27-09.avi"
+video_path = r"C:\Users\26\Desktop\Day1\checklile\for_pub\eval3\robot_2026-03-13_11-05-12.avi"
 log_directory = r"C:\Users\26\Desktop\лог файл"
-log_filename = "user.txt"
+
+# Генерируем уникальное имя файла с датой и временем
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_filename = f"user_{timestamp}.txt"
 full_log_path = os.path.join(log_directory, log_filename)
 
 if not os.path.exists(log_directory):
@@ -22,7 +26,7 @@ line_idx = 1
 
 # Открываем файл для записи
 with open(full_log_path, "w") as log_file:
-    print(f"Запись лога в: {full_log_path}")
+    print(f"Новый лог файл создан: {full_log_path}")
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -52,14 +56,13 @@ with open(full_log_path, "w") as log_file:
             cv2.circle(frame, (cx, int(h*0.8)), 7, (0, 0, 255), -1)
 
         # 4. Сохранение в лог с НОМЕРОМ СТРОКИ
-        # Формат: "НомерСтроки: Лево Право"
         log_file.write(f"{line_idx}: {v_left} {v_right}\n")
-        
-        # Увеличиваем счетчик для следующей итерации
         line_idx += 1
 
         # Вывод на экран
-        cv2.putText(frame, f"Line:{line_idx} L:{v_left} R:{v_right}", (20, 40), 
+        cv2.putText(frame, f"File: {log_filename}", (20, 40), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1)
+        cv2.putText(frame, f"L:{v_left} R:{v_right}", (20, 70), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         
         cv2.imshow('Line Tracking', frame)
@@ -69,4 +72,4 @@ with open(full_log_path, "w") as log_file:
 
 cap.release()
 cv2.destroyAllWindows()
-print(f"Готово! Записано строк: {line_idx-1}")
+print(f"Готово! Все данные в: {log_filename}")
