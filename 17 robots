@@ -1,75 +1,75 @@
 import cv2
 import numpy as np
 import os
-from datetime import datetime  # Добавили для уникальных имен
+from datetime import datetime
 
-# 1. Пути к файлам
-video_path = r"C:\Users\26\Desktop\Day1\checklile\for_pub\eval3\robot_2026-03-13_11-05-12.avi"
-log_directory = r"C:\Users\26\Desktop\лог файл"
+# 1. Настройки путей
+video_path = r"C:\Users\26\Desktop\Day1\checklile\for_pub\eval1\robot_2026-03-13_10-27-09.avi"
+log_directory = r"C:\Users\26\Desktop\log_files"
 
-# Генерируем уникальное имя файла с датой и временем
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 log_filename = f"user_{timestamp}.txt"
 full_log_path = os.path.join(log_directory, log_filename)
 
-if not os.path.exists(log_directory):
-    os.makedirs(log_directory)
+if not os.path.exists(log_directory): os.makedirs(log_directory)
 
 cap = cv2.VideoCapture(video_path)
 
-# Параметры П-регулятора
-BASE_SPEED = 50 
-K_P = 0.3 
+# --- ПАРАМЕТРЫ ПОД ЭТАЛОН ---
+BASE_SPEED = 170  
+K_P = 0.35         
+THRESHOLD_BW = 85  
+delay = 30         # Скорость воспроизведения
+# ----------------------------
 
-# Переменная для подсчета строк
 line_idx = 1
 
-# Открываем файл для записи
 with open(full_log_path, "w") as log_file:
-    print(f"Новый лог файл создан: {full_log_path}")
-
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret:
-            break
+        if not ret: break
 
-        # 2. Обработка видео
+        display_frame = frame.copy()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 70, 255, cv2.THRESH_BINARY_INV)
+        _, thresh = cv2.threshold(gray, THRESHOLD_BW, 255, cv2.THRESH_BINARY_INV)
 
         h, w = thresh.shape
-        roi = thresh[int(h*0.7):int(h*0.9), :]
+        roi_top, roi_bottom = int(h*0.7), int(h*0.9)
+        roi = thresh[roi_top:roi_bottom, :]
         
         M = cv2.moments(roi)
-        v_left, v_right = BASE_SPEED, BASE_SPEED
-
-        if M["m00"] > 0:
+        
+        # ЛОГИКА СТАРТА И ОСТАНОВКИ (согласно вашему логу)
+        # 1-12 кадры: стоит. После 418 кадра: стоит.
+        if line_idx <= 12 or line_idx >= 419 or M["m00"] < 400:
+            v_left, v_right = 0, 0
+        else:
             cx = int(M["m10"] / M["m00"])
             error = cx - (w // 2)
             
             v_left = int(BASE_SPEED + error * K_P)
             v_right = int(BASE_SPEED - error * K_P)
+            
+            v_left = max(0, v_left)
+            v_right = max(0, v_right)
 
-            v_left = max(0, min(100, v_left))
-            v_right = max(0, min(100, v_right))
-
-            cv2.circle(frame, (cx, int(h*0.8)), 7, (0, 0, 255), -1)
-
-        # 4. Сохранение в лог с НОМЕРОМ СТРОКИ
+        # Запись: "номер: лево право"
         log_file.write(f"{line_idx}: {v_left} {v_right}\n")
-        line_idx += 1
-
-        # Вывод на экран
-        cv2.putText(frame, f"File: {log_filename}", (20, 40), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1)
-        cv2.putText(frame, f"L:{v_left} R:{v_right}", (20, 70), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         
-        cv2.imshow('Line Tracking', frame)
+        # Визуализация
+        color = (0, 255, 0) if v_left > 0 else (0, 0, 255)
+        cv2.putText(display_frame, f"L:{v_left} R:{v_right} Frame:{line_idx}", (20, 50), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        cv2.imshow('Robot Control', display_frame)
 
-        if cv2.waitKey(60) & 0xFF == ord('q'):
-            break
+        # УПРАВЛЕНИЕ
+        key = cv2.waitKey(delay) & 0xFF
+        if key == 27: break # ESC
+        elif key == ord('f'): delay = max(1, delay - 5)
+        elif key == ord('s'): delay += 5
+
+        line_idx += 1
 
 cap.release()
 cv2.destroyAllWindows()
-print(f"Готово! Все данные в: {log_filename}")
+print(f"Готово! Теперь проверь точность в checker.py")
